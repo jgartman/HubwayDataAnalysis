@@ -1,0 +1,446 @@
+---
+title: "Bike Sharing Service Analysis"
+author: 'Author: Josh Gartman'
+date: "March 29, 2016"
+output: pdf_document
+subtitle: CS 7280, Northeastern University
+---
+
+Introduction:
+
+Cities around the world are constantly looking for innovative ways to provide their residents with alternative forms of transportation that are fast, clean, and promote healthy lifestyles.  Bike sharing services are an example of a way that residents can be encouraged to exercise while reducing traffic congestion and motor vehicle emissions.  In Boston, Hubway operates approximately 150 bike sharing stations serving tens of thousands of customers annually.  For services such as Hubway to be successful they must analyze the riding habits of their customers so they can better target their services, project costs and expand their reach.  My project focuses on a data set containing information about trips taken using Hubway from the inception of the service in 2011 to the end of 2012.  This data set is available at http://hubwaydatachallenge.org/.  Specifically, my analysis intends to create a model of the duration of a rider's trip based on demographic information about that rider and information about the distance traveled on the trip itself.  This information could be used to make usage projections based on the demographic information of current and potential markets.
+
+Methods:
+
+The most important method used in this analysis is multiple linear regression.  Multiple linear regression models a response variable $Y$ as a function of a set of predictor variables $X_i$.  The formal description of a general linear regression model is $Y_i = \beta_0 + \beta_1X_{i1} + \beta_2X_{i2} + ... + \beta_{p - 1}X_{i,p-1} + \epsilon_i$ where $\beta_0, \beta_1,..., \beta_{p-1}$ are parameters, $X_{i1}, X_{i2}, ...,X_{i,p-1}$ are known constants and the $\epsilon_i$ are all independent $N(0,\sigma^2)$.  In the given data set, it is possible that the same rider accounts for more than one trip which would violate the assumption that all the trips are independent.  The data set does not contain any unique rider ID so it is not possible to definitively determine which observations a single rider may account for.  An aggressive approach to dealing with this potential issue is to throw out all observations where the riders birth year, gender and home zip code have already appeared in a previous observation.  Although this approach will likely throw out more data than is necessary it will ensure that the remaining observations are all from distinct Hubway users.  Once the model has been fitted the analysis turns to diagnostics of the model itself.  The first step of this analysis is to plot the fitted values from the model $\hat{Y_i}$ vs the residuals $Y_i - \hat{Y_i}$.  The purpose of this step is to analyze whether there is systematic deviation or non-constant variance for the residuals at the various levels of the fitted values $\hat{Y_i}$.  To test for non-constant variance the Breusch-Pagan test can be utilized.  This procedure test whether the variance of the residuals $\sigma_i$ is related to $X$ by $log \sigma_{i}^2 = \gamma_0 + \gamma_1X$.  The null hypothesis is that $\gamma_1 = 0$ and therefore the variance is a constant.  Another model diagnostic is a quantile-quantile plot of the residuals against the theoretical quantiles of the normal distribution.  This will help elucidate if the residuals are normally distributed in accordance with the general linear model.  After this, an $F$ test for the regression relation is performed.  This test relies on the test statistic $F* = \frac{MSR}{MSE}$ where $MSR$ is regression mean squared and $MSE$ is error mean squared.  The procedure is designed to test if there is a regression relation between the response variable $Y$ and the predictor variables $X_i$.  If appropriate, the following relation can then be used with the model to establish confidence intervals for response at various levels of the predictor variables: $\hat{Y} \pm Ws\{\hat{Y_h}\}$ where $W^2 = pF(1 - \alpha;p,n-p)$.
+
+Results:
+
+```{r, include=FALSE}
+#radius of the earth in meters.  This is used in the function to calculate distance based on 
+#longitude and latitude of the starting and ending station of a trip
+EARTH_RADIUS <- 6371000
+
+#convert radians to degrees
+rad2deg <- function(rad) {(rad * 180) / (pi)}
+
+#convert degrees to radians
+deg2rad <- function(deg) {(deg * pi) / (180)}
+
+#the haversine function is used to give the distance in meters between a starting and ending
+#longitude and latitude.  See https://en.wikipedia.org/wiki/Haversine_formula.
+haversine <- function(lat1,long1,lat2,long2){
+  phi1 <- deg2rad(lat1)
+  
+  phi2 <- deg2rad(lat2)
+  
+  delta_phi <- deg2rad(lat2 - lat1)
+  
+  delta_lambda <- deg2rad(long2 - long1)
+  
+  a <- (sin(delta_phi/2))^2 + 
+    cos(phi1)*cos(phi2) *
+    (sin(delta_lambda/2))^2
+  
+  c <- 2 * atan2(sqrt(a), sqrt(1 - a))
+  
+  EARTH_RADIUS * c
+}
+
+library(plyr)
+
+library(dplyr)
+
+library(tidyr)
+
+#observations of all trips taken
+hubway_trips <- read.csv("C:/Users/Josh/Desktop/CS/NU/CS7280/hubway_2011_07_through_2013_11/hubway_trips.csv")
+
+#station information, including station name and number, longitude and latitude
+hubway_stations <- read.csv("C:/Users/Josh/Desktop/CS/NU/CS7280/hubway_2011_07_through_2013_11/hubway_stations.csv")
+
+#filter out trips lasting longer than 12 hours and remove any trips that have na values
+hubway_trips <- hubway_trips %>% na.omit() %>% filter(duration < 43200)
+
+summary(hubway_trips)
+
+#Add distance between starting and ending station as a new column
+
+#Couldn't get join to work with columns of different names so create two new data frames from the hubway_stations data
+#and join on those new column names
+strt_hubway_stations <- plyr::rename(hubway_stations, replace = c("id" = "strt_statn", "lat" = "strt_lat", "lng" = "strt_lng")) %>%
+  select(-station, -terminal,-municipal,-status)
+
+end_hubway_stations <- plyr::rename(hubway_stations, replace = c("id" = "end_statn", "lat" = "end_lat", "lng" = "end_lng")) %>%
+  select(-station, -terminal,-municipal,-status)
+
+hubway_trips <- join(hubway_trips, strt_hubway_stations)
+
+hubway_trips <- join(hubway_trips, end_hubway_stations)
+
+#add column with trip distance in meters
+hubway_trips <- mutate(hubway_trips, dist = haversine(strt_lat, strt_lng, end_lat, end_lng))
+
+#remove all observations that are duplicates of earlier observations based on zip code, gender and birth year.
+#As described in the methods section, this is to ensure the independence of the data
+deduped.hubway_trips <- hubway_trips[!duplicated(hubway_trips[,c('zip_code','birth_date','gender')]),]
+
+#recode male and female as 1 and 0 to simplify analysis
+deduped.hubway_trips$scode <- revalue(deduped.hubway_trips$gender, c("Male" = 1, "Female" = 0))
+
+#begin process of adding new column with rider age by first splitting start_date into the day, month and
+#year in one column and time in another column
+temporary_data_1 <- deduped.hubway_trips %>% tidyr::separate(start_date, into=c("start_day_mon_year","start_time")," ")
+
+#continue by splitting the day month and year into 3 separate columns
+temporary_data_2 <- temporary_data_1 %>% tidyr::separate(start_day_mon_year, into=c("start_day", "start_month", "start_year"), "/")
+
+#calculate the appoximate age of the rider by subtracting the year in which the observation was recorded
+#from the birth year of the rider.  There is some subtlety here since, for example someone born in 1988 could
+#be 3 different possible ages in 2012 depending on when their birthday is.  Since we don't have this information
+#we just subtract the two years from one another.  This will likely even out on average.
+hubway_model_data <- temporary_data_2 %>% dplyr::mutate(rider_age = as.numeric(start_year) - birth_date)
+
+library(hexbin)
+
+#create regression model with trip duration as response variabel and rider age, trip distance
+#and gender as predictor variables
+hubway_fit <- lm(duration ~ dist+rider_age+scode, data = hubway_model_data)
+
+#create regression model with the log of trip duration as response variabel and rider age, trip distance
+#and gender as predictor variables
+log_hubway_fit <- lm(log(duration)~dist+rider_age+scode,data=hubway_model_data)
+
+
+#check for normality of residuals
+qqnorm(hubway_fit$residuals)
+qqline(hubway_fit$residuals)
+```
+The estimated values of the regression coefficients for a multiple linear regression model that treats the duration of a trip as the response variable and distance beteween starting and ending station, rider age, and gender as predictor variables are shown in the table below.  Rider age is in years, distance is in meters and the trip duration is in seconds.  Gender has been recoded as scode where 1 is male and 0 is female.
+
+```{r, echo=FALSE}
+summary(hubway_fit)
+```
+To examine the appropriateness of the model, the predicted values $\hat{Y_i}$ are plotted against the residuals $Y_i - \hat{Y_i}$.
+
+```{r, echo=FALSE}
+#plot residuals vs fitted values to check for non-constant error variance
+hexbinplot(hubway_fit$residuals~hubway_fit$fitted.values, aspect=1, bins=50, xlab = "Fitted Values", ylab="Residuals", style="lattice")
+```  
+Observe that the residuals appear to have a few large positive values and many small negative values.  Next, the assumption that the residuals are normally distributed is analyzed by a QQplot.
+
+```{r, echo=FALSE}
+qqnorm(hubway_fit$residuals)
+qqline(hubway_fit$residuals)
+```
+This plot indicates that there are significant deviations from normality for the larger values of residuals.  The largest residuals are larger than what would be expected if the residuals were normally distributed.  In such cases it may be appropriate to transform the response variable $Y$ and see if the model assumptions might hold more closely for the transformed values.  One such common transformation is a log transform of the response variable $Y$ with the same group of predictor variables.  This model is formally described as $Y_i` = \beta_0 + \beta_1X_{i1} + \beta_2X_{i2} + ... + \beta_{p - 1}X_{i,p-1} + \epsilon_i$ where $Y_i` = log(Y_i)$ and all the other parameters are equivalent to the description given earlier.  The summary for the regression coefficients for this model is shown below:
+
+```{r, echo=FALSE}
+summary(log_hubway_fit)
+```
+
+Next, we examine the same plots as before to verify the model assumptions relating to the residuals.
+
+```{r, echo=FALSE}
+hexbinplot(log_hubway_fit$residuals~hubway_fit$fitted.values, aspect=1, bins=50, xlab = "Fitted Values", ylab="Residuals", style="lattice")
+
+qqnorm(log_hubway_fit$residuals)
+qqline(log_hubway_fit$residuals)
+```
+
+The quantile-quantile plot indicates that the largest and smallest values of the residuals are larger and smaller than what would be expected if the residuals were actually normally distributed.  The residuals for the log model appear to be more evenly balanced around 0 however, the variance may not be constant.  The Breusch-Pagan test can be used to establish non-constant variance of residuals.
+
+```{r, echo=FALSE}
+library(car)
+
+ncvTest(log_hubway_fit)
+```
+Using the test we can reject the null hypothesis that the residuals have constant variance with 95% confidence.  In such cases a weighted regression may be appropriate.  A plot of the absolute residuals against the predictor variable of trip distance reveals that the magnitude of the residuals appears to decrease when distance between beginning and ending station increases.
+
+```{r, echo=FALSE}
+hexbinplot(abs(log_hubway_fit$residuals)~hubway_model_data$dist, aspect=1, bins=50, xlab = "Distance", ylab="abs(Residuals)", style="lattice")
+```
+
+The distribution appears similar to an exponential decay.  This similarity was incorporated into the weights for the weighted regression.  After some trial and error a weighting function of $exp(\sqrt{dist})$ was arrived at.  Using this function a weighted regression model can be established.  The coefficients of this model are summarized below.
+
+```{r, echo=FALSE}
+#create weighted regression function
+weighted_log_hubway_fit <- lm(formula = log(duration) ~ dist + rider_age + scode, data = hubway_model_data, 
+    weights = exp(sqrt(dist)))
+summary(weighted_log_hubway_fit)
+```
+The Breusch-Pagan test is again used to check for non-constant variance of the error terms
+
+```{r,echo=FALSE}
+ncvTest(weighted_log_hubway_fit)
+```  
+We fail to reject the null hypothesis that the error terms have constant variance.  Next, it is appropriate to test if there is a regression relation between the predictor and response variables using the test statistic $F* = \frac{MSR}{MSE}$.
+
+```{r, echo=FALSE}
+summary(weighted_log_hubway_fit)$fstatistic
+```
+The pvalue of F* is 0+.  This indicates that there is a linear relationship between the predictor variables and the response variable.  A correlation matrix with the predictor variables of rider age and distance between beginning and ending stations to find if multicolinearity exists.
+
+```{r, echo=FALSE}
+cor(select(hubway_model_data, dist, rider_age))
+```
+This shows that the predictor variables of inter station distance and rider age aren't strongly correlated with one another.  At this point it is appropriate to use the model to make predictions about new observations.  Suppose Hubway were installing a new station and wanted to estimate the typical trip duration to a station 1000m away for various demographic groups of their users.  For example, suppose they wanted to predict trip duration for males of age 25.  The model is evaluated with the given parameters for the predictor variables.  To interpret the result it is necessary to use the exponential function to transform the data back to the original scale.  The units of the output are seconds.
+
+```{r, echo=FALSE}
+new_data_point <- data.frame(rider_age = c(35), dist = c(1000), scode = as.factor(c(1)))
+
+exp(predict.lm(weighted_log_hubway_fit, newdata = new_data_point, interval="confidence"))
+```
+
+As discussed previously, the residuals of the regression relation appear to vary with the distance between starting and ending station of the trip.  It would be useful to establish how the other predictor variables relate to trip duration when this distance is held constant.  For this analysis trips between only a single starting and ending station are examined, removing potentially non-independent observations as before to ensure the independence of the data.  The starting and ending pair of stations that account for the greatest number of observations are TD Garden (station #38) as the starting point with South Station (station #22) as the ending point.  The following graph shows the relation between trip duration and rider age between these two stations with the observations color coded by gender.
+
+```{r, echo=FALSE}
+#select all trips beginning at station #38 and ending at #22
+data.38_to_22_trips <- hubway_trips %>% filter(strt_statn == 38) %>% filter(end_statn ==22)
+
+#remove any observations possibly from the same rider to ensure independence of the data
+deduped.38_to_22_trips <- data.38_to_22_trips[!duplicated(data.38_to_22_trips[,c('zip_code','birth_date','gender')]),]
+
+deduped.38_to_22_trips$scode <- revalue(deduped.38_to_22_trips$gender, c("Male" = 1, "Female" = 0))
+
+#begin process of adding new column with rider age by first splitting start_date into the day, month and
+#year in one column and time in another column
+temporary_data_3 <- deduped.38_to_22_trips %>% tidyr::separate(start_date, into=c("start_day_mon_year","start_time")," ")
+
+#continue by splitting the day month and year into 3 separate columns
+temporary_data_4 <- temporary_data_3 %>% tidyr::separate(start_day_mon_year, into=c("start_day", "start_month", "start_year"), "/")
+
+hubway_model_data_38_to_22 <- temporary_data_4 %>% dplyr::mutate(rider_age = as.numeric(start_year) - birth_date)
+
+
+library(ggplot2)
+
+ggplot(select(hubway_model_data_38_to_22, duration,dist,scode,rider_age), aes(x=rider_age, y=log(duration), color=scode)) + geom_point(shape=1) + geom_smooth(method=lm)
+```  
+It appears that trips by males (scode 1) are generally shorter in duration than those by females (scode 0) although the 95% confidence bands for the regression lines do have significant overlap.  The trip duration also does seem to generally increase with age.
+
+Discussion:
+
+The most important takeaway of the previous analysis is the difficulty in using linear regression to model the duration of Hubway users trips based on their age, gender and distance between stations.  The main technical issue is that the first couple of attempts to create regression models all violated the assumptions of linear regression.  Specifically, the variance of the residuals of these models seemed to dramatically decrease as the distance of the trip increased.  Part of the difficulty with the analysis is that Hubway riders have different purposes for their trips which can affect duration.  For example, some users may be interested in using Hubway to get to work where as others may be using the service for sightseeing.  This variation may account for the shortcomings of the regression model.  This also elucidates the more general difficulty of trying to model human behavior with techniques like linear regression.  Because there can be so much variability in human behavior these techniques often lack the explanatory power they may have in more predictable domains.  The data set seems to lend itself readily to network analysis techniques.  As an extension of the previous analysis, it could be worthwhile to try and model the data set as a weighted graph where the stations are nodes and the weighted edges between stations represent the distance between them or the probability that a trip starting at one station will end at the other.  Such analysis could potentially provide more insight and lead to a deeper understanding of the usage habits of users of bike sharing services.
+
+
+Appendix:
+
+
+```{r}
+#Code and additional plots
+
+
+#radius of the earth in meters.  This is used in the function to calculate distance based on 
+#longitude and latitude of the starting and ending station of a trip
+EARTH_RADIUS <- 6371000
+
+#convert radians to degrees
+rad2deg <- function(rad) {(rad * 180) / (pi)}
+
+#convert degrees to radians
+deg2rad <- function(deg) {(deg * pi) / (180)}
+
+#the haversine function is used to give the distance in meters between a starting and ending
+#longitude and latitude.  See https://en.wikipedia.org/wiki/Haversine_formula.
+haversine <- function(lat1,long1,lat2,long2){
+  phi1 <- deg2rad(lat1)
+  
+  phi2 <- deg2rad(lat2)
+  
+  delta_phi <- deg2rad(lat2 - lat1)
+  
+  delta_lambda <- deg2rad(long2 - long1)
+  
+  a <- (sin(delta_phi/2))^2 + 
+    cos(phi1)*cos(phi2) *
+    (sin(delta_lambda/2))^2
+  
+  c <- 2 * atan2(sqrt(a), sqrt(1 - a))
+  
+  EARTH_RADIUS * c
+}
+
+library(plyr)
+
+library(dplyr)
+
+library(tidyr)
+
+#observations of all trips taken
+hubway_trips <- read.csv("C:/Users/Josh/Desktop/CS/NU/CS7280/hubway_2011_07_through_2013_11/hubway_trips.csv")
+
+#station information, including station name and number, longitude and latitude
+hubway_stations <- read.csv("C:/Users/Josh/Desktop/CS/NU/CS7280/hubway_2011_07_through_2013_11/hubway_stations.csv")
+
+#filter out trips lasting longer than 12 hours and remove any trips that have na values.
+hubway_trips <- hubway_trips %>% na.omit() %>% filter(duration < 43200)
+
+summary(hubway_trips)
+
+#Add distance between starting and ending station as a new column
+
+#Couldn't get join to work with columns of different names so create two new data frames from the 
+#hubway_stations data and join on those new column names
+strt_hubway_stations <- plyr::rename(hubway_stations, replace = c("id" = "strt_statn", 
+  "lat" = "strt_lat", "lng" = "strt_lng")) %>%
+  select(-station, -terminal,-municipal,-status)
+
+end_hubway_stations <- plyr::rename(hubway_stations, replace = c("id" = "end_statn", 
+ "lat" = "end_lat", "lng" = "end_lng")) %>%
+  select(-station, -terminal,-municipal,-status)
+
+hubway_trips <- join(hubway_trips, strt_hubway_stations)
+
+hubway_trips <- join(hubway_trips, end_hubway_stations)
+
+#add column with trip distance in meters
+hubway_trips <- mutate(hubway_trips, dist = haversine(strt_lat, strt_lng, end_lat, end_lng))
+
+#remove all observations that are duplicates of earlier observations based on zip code, gender 
+#and birth year. As described in the methods section, this is to ensure the independence of the data
+deduped.hubway_trips <- hubway_trips[!duplicated(hubway_trips[,c('zip_code','birth_date','gender')]),]
+
+#recode male and female as 1 and 0 to simplify analysis
+deduped.hubway_trips$scode <- revalue(deduped.hubway_trips$gender, c("Male" = 1, "Female" = 0))
+
+#begin process of adding new column with rider age by first splitting start_date 
+#into the day, month and year in one column and time in another column
+temporary_data_1 <- deduped.hubway_trips %>% tidyr::separate(start_date, 
+  into=c("start_day_mon_year","start_time")," ")
+
+#continue by splitting the day month and year into 3 separate columns
+temporary_data_2 <- temporary_data_1 %>% tidyr::separate(start_day_mon_year, into=c("start_day", "start_month", "start_year"), "/")
+
+#calculate the appoximate age of the rider by subtracting the year in which the observation 
+#was recorded from the birth year of the rider.  There is some subtlety here since, for 
+#example someone born in 1988 could be 3 different possible ages in 2012 depending on when 
+#their birthday is.  Since we don't have this information we just subtract the two years from 
+#one another.  This will likely even out on average.
+hubway_model_data <- temporary_data_2 %>% dplyr::mutate(rider_age = as.numeric(start_year) - birth_date)
+
+library(hexbin)
+
+#create regression model with trip duration as response variable and rider age, 
+#trip distance and gender as predictor variables
+hubway_fit <- lm(duration ~ dist+rider_age+scode, data = hubway_model_data)
+
+#create regression model with the log of trip duration as response variabel and rider age, 
+#trip distance and gender as predictor variables
+log_hubway_fit <- lm(log(duration)~dist+rider_age+scode,data=hubway_model_data)
+
+#plot residuals vs fitted values to check for non-constant error variance
+hexbinplot(hubway_fit$residuals~hubway_fit$fitted.values, aspect=1, bins=50, 
+           xlab = "Fitted Values", ylab="Residuals", style="lattice")
+
+#check for normality of residuals
+qqnorm(hubway_fit$residuals)
+qqline(hubway_fit$residuals)
+
+#summary of log model
+summary(log_hubway_fit)
+
+hexbinplot(log_hubway_fit$residuals~hubway_fit$fitted.values, aspect=1, bins=50, xlab = "Fitted Values", ylab="Residuals", style="lattice")
+
+qqnorm(log_hubway_fit$residuals)
+qqline(log_hubway_fit$residuals)
+
+library(car)
+
+#test log model for non-constant variance
+ncvTest(log_hubway_fit)
+
+#plot residuals against distance
+hexbinplot(abs(log_hubway_fit$residuals)~hubway_model_data$dist, aspect=1, bins=50, xlab = "Distance", ylab="abs(Residuals)", style="lattice")
+
+#test weighted model for non-constant variance
+ncvTest(weighted_log_hubway_fit)
+
+summary(weighted_log_hubway_fit)$fstatistic
+
+#correlations between predictor variables
+cor(select(hubway_model_data, dist, rider_age))
+
+#create new data point
+new_data_point <- data.frame(rider_age = c(35), dist = c(1000), scode = as.factor(c(1)))
+
+#confidence interval for predicted response at new data point
+exp(predict.lm(weighted_log_hubway_fit, newdata = new_data_point, interval="confidence"))
+
+#select all trips beginning at station #38 and ending at #22
+data.38_to_22_trips <- hubway_trips %>% filter(strt_statn == 38) %>% filter(end_statn ==22)
+
+#remove any observations possibly from the same rider to ensure independence of the data
+deduped.38_to_22_trips <- data.38_to_22_trips[!duplicated(data.38_to_22_trips[,c('zip_code','birth_date','gender')]),]
+
+deduped.38_to_22_trips$scode <- revalue(deduped.38_to_22_trips$gender, c("Male" = 1, "Female" = 0))
+
+#begin process of adding new column with rider age by first splitting start_date into the day, month and
+#year in one column and time in another column
+temporary_data_3 <- deduped.38_to_22_trips %>% tidyr::separate(start_date, into=c("start_day_mon_year","start_time")," ")
+
+#continue by splitting the day month and year into 3 separate columns
+temporary_data_4 <- temporary_data_3 %>% tidyr::separate(start_day_mon_year, into=c("start_day", "start_month", "start_year"), "/")
+
+hubway_model_data_38_to_22 <- temporary_data_4 %>% dplyr::mutate(rider_age = as.numeric(start_year) - birth_date)
+
+
+library(ggplot2)
+
+ggplot(select(hubway_model_data_38_to_22, duration,dist,scode,rider_age), aes(x=rider_age, y=log(duration), color=scode)) + geom_point(shape=1) + geom_smooth(method=lm)
+
+#create regression model from hubway_model_data_38_to_22 and test for non-constant variance
+log_hubway_fit_38_to_22 <- lm(log(duration)~rider_age+scode,data=hubway_model_data_38_to_22)
+
+#plot of fitted values vs residuals for log_hubway_fit_38_to_22
+hexbinplot(log_hubway_fit_38_to_22$residuals~log_hubway_fit_38_to_22$fitted.values, aspect=1, bins=50, xlab = "Fitted Values", ylab="Residuals", style="lattice")
+
+#qqplot for log_hubway_fit_38_to_22
+qqnorm(log_hubway_fit_38_to_22$residuals)
+qqline(log_hubway_fit_38_to_22$residuals)
+
+#plot of Hubway stations on map:
+library(ggmap)
+
+citation('ggmap')
+
+##################################################
+#Assorted visualizations of data set
+
+map <- get_map(location = "Boston", zoom = 12)
+
+ggmap(map) + geom_point(aes(x = lng, y = lat), data = hubway_stations, alpha=.5)
+
+start_hubway_trips <- hubway_trips %>% group_by(strt_statn, strt_lat, strt_lng) %>% summarise(station_count = n())
+
+#plot of stations with size relative to number of trips beginning at that station
+ggmap(map) + geom_point(aes(x = strt_lng, y = strt_lat, size=station_count), data = start_hubway_trips, alpha=.5, col="blue")
+
+end_hubway_trips <- hubway_trips %>% group_by(end_statn, end_lat, end_lng) %>% summarise(station_count = n())
+
+#plot of stations with size relative to number of trips ending at that station
+ggmap(map) + geom_point(aes(x = end_lng, y = end_lat, size=station_count), data = end_hubway_trips, alpha=.5, col="red")
+```
+```{r}
+
+#plot of total number of daily trips taken vs. Date for 2012
+daily_hubway_trips <- hubway_trips %>% 
+  tidyr::separate(start_date, into=c("start_day_mon_year","start_time")," ") %>% 
+  filter(seq_id > 140521) %>% 
+  group_by(as.Date(start_day_mon_year, "%m/%d/%Y")) %>% 
+  summarise(count = n()) 
+
+colnames(daily_hubway_trips)[1] <- "Date"
+
+ggplot(daily_hubway_trips, aes(x=Date, y=count)) + geom_point(shape=1, colour="blue")
+
+#get all trip starting at Northeastern
+NEU_hubway_trips <- hubway_trips %>% filter(strt_statn==5)
+
+NEU_hubway_trips <- NEU_hubway_trips %>% group_by(end_statn, end_lat, end_lng, strt_lat, strt_lng) %>% summarise(station_count = n())
+
+map <- get_map(location = "Boston", zoom = 13)
+
+#map all trip starting at Northeastern
+ggmap(map) + geom_segment(aes(x = strt_lng, xend = end_lng , y = strt_lat, yend= end_lat, size = station_count, alpha=.1, colour=station_count), data=NEU_hubway_trips)
+```
